@@ -1,29 +1,25 @@
-# vue-crewai
-
-This template should help get you started developing with Vue 3 in Vite.
-
-## Recommended IDE Setup
-
-[VSCode](https://code.visualstudio.com/) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
-
-## Customize configuration
-
-See [Vite Configuration Reference](https://vitejs.dev/config/).
-
-## Project Setup
+# 营销任务前端
 
 ```sh
 npm install
-```
-
-### Compile and Hot-Reload for Development
-
-```sh
 npm run dev
 ```
 
-### Compile and Minify for Production
+生产构建：`npm run build`。
 
-```sh
-npm run build
-```
+页面包含必填的网址、本次任务目标，以及可选的项目材料。
+支持 DOCX、可提取文本的 PDF、UTF-8 Markdown 和 HTML/HTM；最多 5 个文件，每个不超过 10 MB。
+
+1. 选择材料后点击“上传并建立知识库”。页面展示上传、解析、索引和失败状态。
+2. 等待知识库就绪后点击“启动任务”；材料会绑定到本次工作流程。
+3. 点击“刷新结果”查看进度、最终结果和检索过的材料来源。检索来源清单不代表每条生成结论都已验证。
+
+文件仅在点击上传时发送。增删材料会使当前选择对应的知识库失效，需要重新建库。
+刷新页面会清空本地选择，后端已保存的知识库仍存在；当前页面尚无历史知识库选择器。
+未选择材料时，可仅使用网址和任务目标启动。
+
+默认 API 为 `http://127.0.0.1:8012/api`，可通过 `VITE_API_BASE_URL` 覆盖。
+开发页面使用 5173 端口；更改来源或部署地址时，同步调整后端的 CORS 来源配置。
+
+后端安装、模型配置和接口说明见 [后端说明](../crewaiBackend/README.md)。
+测试脚本和样例材料按要求在验证后删除，不保留测试命令。

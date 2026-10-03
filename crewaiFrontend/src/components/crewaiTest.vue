@@ -13,6 +13,8 @@
           v-model="form.task_goal"
           type="textarea"
           :rows="3"
+          maxlength="4000"
+          show-word-limit
           placeholder="例如：面向年轻通勤人群，为新品制定推广策略并生成社交媒体文案。"
           :disabled="starting"
         />
@@ -22,8 +24,8 @@
       <el-form-item label="上传材料">
         <div class="materials">
           <el-alert
-            title="材料接入尚未启用"
-            description="当前仅可选择和移除文件，材料不会上传或参与分析。未选择材料时，可使用网址和任务目标启动任务。"
+            title="项目材料知识库"
+            description="选择材料后点击“上传并建立知识库”，处理完成后，分析、策略和文案任务将共享这份材料。材料可选。"
             type="info"
             :closable="false"
             show-icon
@@ -37,7 +39,7 @@
             :show-file-list="false"
             :accept="MATERIAL_ACCEPT"
             :limit="MAX_MATERIAL_FILES"
-            :disabled="starting"
+            :disabled="starting || materialsBusy"
             :on-change="handleMaterialChange"
             :on-exceed="handleMaterialExceed"
           >
@@ -47,23 +49,36 @@
             </template>
           </el-upload>
           <ul v-if="materialFiles.length" class="material-list" aria-label="已选择的材料">
-            <li v-for="file in materialFiles" :key="file.uid">
+            <li v-for="(file, index) in materialFiles" :key="file.uid">
               <div class="material-info">
                 <span class="file-name">{{ file.name }}</span>
-                <el-tag type="warning" size="small">已选择 · 尚未接入</el-tag>
+                <el-tag :type="knowledgeBase?.status === 'READY' ? 'success' : knowledgeBase?.status === 'ERROR' ? 'danger' : 'info'" size="small">
+                  {{ materialStatus(index) }}
+                </el-tag>
               </div>
               <el-button
                 text
                 type="danger"
-                :disabled="starting"
+                :disabled="starting || materialsBusy"
                 :aria-label="`移除 ${file.name}`"
                 @click="removeMaterial(file)"
               >移除</el-button>
             </li>
           </ul>
-          <p v-if="materialFiles.length" class="material-notice" role="status">
-            这 {{ materialFiles.length }} 个文件尚未接入。若要按当前方式启动，请先移除材料。
+          <el-button
+            v-if="materialFiles.length"
+            class="build-knowledge-button"
+            :loading="materialsBusy"
+            :disabled="starting || knowledgeBase?.status === 'READY'"
+            @click="uploadMaterials"
+          >{{ knowledgeBase?.status === 'ERROR' ? '重新上传并建立知识库' : '上传并建立知识库' }}</el-button>
+          <p v-if="materialFiles.length" class="material-notice" :data-status="knowledgeBase?.status" role="status">
+            {{ knowledgeBase?.message || '材料仅已选择，尚未上传。请先建立知识库。' }}
           </p>
+          <p v-if="knowledgeBase?.status === 'READY'" class="field-help">
+            已接入 {{ materialFiles.length }} 个文件，共 {{ knowledgeBase.chunk_count }} 个正文片段。
+          </p>
+          <el-button v-if="pollingFailed" text @click="refreshKnowledgeBase">重新查询材料状态</el-button>
         </div>
       </el-form-item>
 
@@ -71,7 +86,7 @@
         <el-button
           type="primary"
           :loading="starting"
-          :disabled="materialFiles.length > 0 || refreshing"
+          :disabled="(materialFiles.length > 0 && knowledgeBase?.status !== 'READY') || materialsBusy || refreshing"
           @click="startTask"
         >启动任务</el-button>
         <el-button :loading="refreshing" :disabled="!jobId || starting" @click="refreshTask">刷新结果</el-button>
@@ -81,6 +96,14 @@
     <div v-if="jobId" class="job-info" role="status">
       <span>任务 ID：{{ jobId }}</span>
       <span>状态：{{ jobStatus }}</span>
+    </div>
+    <div v-if="jobSources.length" class="sources">
+      <p>任务检索过的材料片段（具体结论的引用见生成结果）</p>
+      <ul>
+        <li v-for="source in jobSources" :key="source.chunk_id">
+          {{ source.filename }} · {{ source.location }} · {{ source.chunk_id }}
+        </li>
+      </ul>
     </div>
     <div v-if="errorMessage" class="error-message" role="alert">
       <el-alert :title="errorMessage" type="error" :closable="false" show-icon />
@@ -101,7 +124,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import {
@@ -112,17 +135,25 @@ import {
   getWebsiteError,
 } from '../form-utils.js'
 
-const API_URL = 'http://127.0.0.1:8012/api/crew'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8012/api'
+const API_URL = `${API_BASE}/crew`
 const form = ref({ customer_domain: '', task_goal: '' })
 const crewForm = ref(null)
 const materialUpload = ref(null)
 const materialFiles = ref([])
+const knowledgeBase = ref(null)
+const uploading = ref(false)
+const pollingFailed = ref(false)
+const materialsBusy = computed(() => uploading.value || ['PENDING', 'PROCESSING'].includes(knowledgeBase.value?.status))
+let pollingTimer
+const materialRequests = new AbortController()
 const starting = ref(false)
 const refreshing = ref(false)
 const jobId = ref('')
 const jobStatus = ref('')
 const resultContent = ref('')
 const errorMessage = ref('')
+const jobSources = ref([])
 
 const rules = {
   customer_domain: [{
@@ -141,7 +172,9 @@ function handleMaterialChange(file) {
   if (message) {
     materialUpload.value.handleRemove(file)
     ElMessage.error(message)
+    return
   }
+  resetKnowledgeBase()
 }
 
 function handleMaterialExceed() {
@@ -150,7 +183,64 @@ function handleMaterialExceed() {
 
 function removeMaterial(file) {
   materialUpload.value.handleRemove(file)
+  resetKnowledgeBase()
 }
+
+function resetKnowledgeBase() {
+  clearTimeout(pollingTimer)
+  knowledgeBase.value = null
+  pollingFailed.value = false
+  errorMessage.value = ''
+}
+
+function materialStatus(index) {
+  const status = knowledgeBase.value?.files[index]?.status
+  return { PENDING: '已上传 · 待处理', PROCESSING: '正在解析', PARSED: '已解析 · 建立索引中', READY: '已接入', ERROR: '处理失败' }[status] || '已选择 · 待上传'
+}
+
+async function uploadMaterials() {
+  if (!materialFiles.value.length || materialsBusy.value || starting.value) return
+  resetKnowledgeBase()
+  uploading.value = true
+  try {
+    const body = new FormData()
+    for (const file of materialFiles.value) body.append('files', file.raw)
+    const response = await axios.post(`${API_BASE}/knowledge-bases`, body, { signal: materialRequests.signal })
+    knowledgeBase.value = response.data
+    if (['PENDING', 'PROCESSING'].includes(response.data.status)) {
+      pollingTimer = setTimeout(refreshKnowledgeBase, 1500)
+    }
+  } catch (error) {
+    if (!axios.isCancel(error)) showRequestError(error, '材料上传失败，请确认服务可用后重试')
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function refreshKnowledgeBase() {
+  if (!knowledgeBase.value) return
+  clearTimeout(pollingTimer)
+  pollingFailed.value = false
+  try {
+    const response = await axios.get(`${API_BASE}/knowledge-bases/${knowledgeBase.value.knowledge_base_id}`, {
+      signal: materialRequests.signal,
+    })
+    knowledgeBase.value = response.data
+    if (['PENDING', 'PROCESSING'].includes(response.data.status)) {
+      pollingTimer = setTimeout(refreshKnowledgeBase, 1500)
+    }
+  } catch (error) {
+    if (!axios.isCancel(error)) {
+      pollingFailed.value = true
+      showRequestError(error, '材料状态查询失败，请点击“重新查询材料状态”')
+    }
+  }
+}
+
+onUnmounted(() => {
+  clearTimeout(pollingTimer)
+  materialRequests.abort()
+})
 
 function showRequestError(error, fallback) {
   const detail = error.response?.data?.message
@@ -164,13 +254,14 @@ async function startTask() {
   try {
     const isValid = await crewForm.value.validate().catch(() => false)
     if (!isValid) return
-    const payload = buildCrewPayload(form.value, materialFiles.value)
+    const payload = buildCrewPayload(form.value, materialFiles.value, knowledgeBase.value)
     const response = await axios.post(API_URL, payload)
     if (!response.data.job_id) throw new Error('Missing job_id')
     jobId.value = response.data.job_id
     jobStatus.value = '已提交'
     resultContent.value = ''
-    ElMessage.success('任务已提交，仅使用网址和本次任务目标')
+    jobSources.value = []
+    ElMessage.success(materialFiles.value.length ? '任务已提交，将使用项目材料知识库' : '任务已提交')
   } catch (error) {
     showRequestError(error, '任务未能提交，请确认服务可用后重试')
   } finally {
@@ -186,6 +277,7 @@ async function refreshTask() {
     const response = await axios.get(`${API_URL}/${encodeURIComponent(jobId.value)}`)
     jobStatus.value = response.data.status
     resultContent.value = JSON.stringify(response.data, null, 2)
+    jobSources.value = response.data.sources || []
   } catch (error) {
     showRequestError(error, '未能获取任务结果，请稍后重试')
   } finally {
@@ -269,6 +361,14 @@ h1 {
   font-size: 13px;
 }
 
+.material-notice[data-status='READY'] {
+  color: #2e7d32;
+}
+
+.material-notice[data-status='ERROR'] {
+  color: #b42318;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -289,8 +389,22 @@ h1 {
 }
 
 .error-message,
-.result {
+.result,
+.sources {
   margin-top: 20px;
+}
+
+.sources {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.sources ul {
+  padding-left: 20px;
+}
+
+.build-knowledge-button {
+  margin-top: 12px;
 }
 
 .result label {
