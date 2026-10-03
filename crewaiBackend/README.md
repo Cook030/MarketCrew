@@ -1,4 +1,55 @@
 # 1、项目介绍
+## 当前文件知识库功能
+
+前端表单为“网址 + 本次任务目标 + 可选材料”。上传的 DOCX、文本 PDF、UTF-8 MD、HTML/HTM
+经正文提取和 LlamaIndex 切分、Embedding 后构建独立的项目索引。
+三个 Agent 共享本次项目的检索工具，初始检索结果也会传入五个任务。
+检索返回文件名、页码或章节、chunk_id 和正文，生成结果的 `sources` 用于引用依据。
+
+### 安装和启动
+
+```powershell
+cd crewaiBackend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item .env.example .env
+# 填写 .env 的模型和 Embedding 地址、模型名与 API Key 后启动
+.\.venv\Scripts\python.exe -X utf8 main.py
+```
+
+Chat 和 Embedding 独立配置。`EMBEDDING_API_KEY` 为空时回退到 `OPENAI_API_KEY`；
+Embedding 服务须支持 `/embeddings`。切换 Chat 到 OneAPI 或 Ollama 不会自动切换 Embedding。
+修改 Embedding 模型或地址后须重建索引。`.env` 和知识库数据均被 Git 忽略。
+首次建库会将提取的文本发送给所配置的 Embedding 服务；任务会将检索片段发送给所配置的 Chat 服务。
+
+旧版 `crewai-tools` 的 LanceDB 依赖无法在本项目 Windows/Python 环境安装，
+因此保留 CrewAI 0.55.2，使用它支持的 LangChain `StructuredTool` 提供项目检索、网页读取和 Serper 搜索。
+未配置 `SERPER_API_KEY` 时不提供网页搜索工具，网页读取仍可使用。
+Crew 和任务使用显式构造，固定顺序仍是研究、项目理解、营销战略、活动创意、文案。
+
+### 接口
+
+- `POST /api/knowledge-bases`：multipart 表单，`files` 字段可重复，上传 1 至 5 个文件，每个最多 10 MB；返回 202 和 `knowledge_base_id`。
+- `GET /api/knowledge-bases/{id}`：返回 `PENDING / PROCESSING / READY / ERROR`、材料状态和片段数量。只有 READY 可启动带材料的任务。
+- `POST /api/crew`：JSON 包含 `customer_domain`、`task_goal` 和可选 `knowledge_base_id`。旧版 `project_description` 仍可作为目标字段。
+- `GET /api/crew/{job_id}`：返回任务状态、结果、事件、本次知识库 ID 和实际检索过的 `sources`。来源清单是检索记录，不保证所有片段均支持最终结论。
+
+```json
+{
+  "customer_domain": "https://example.com",
+  "task_goal": "为新品制定面向年轻通勤者的推广策略和社交媒体文案",
+  "knowledge_base_id": "上传接口返回的 UUID"
+}
+```
+
+知识库原文件、状态和索引保存于 `crewaiBackend/data/knowledge-bases/{id}`；可用 `DATA_DIRECTORY` 更改目录。
+已完成的知识库可在重启后加载，处理中重启的知识库会标记失败，需重新上传。
+执行中的任务、事件和结果仍保存在内存中，服务重启不恢复任务。
+这是监听本机的单用户开发服务，尚未实现用户登录、租户权限、多进程任务队列、OCR 或 `.doc` 转换。
+运行多个服务进程前应替换当前线程和文件状态管理；不要将本地 UUID 隔离理解为租户授权。
+
+以下保留原教程说明；当前启动和配置方式以上述环境变量方案为准，原文中的示例凭据不用于运行。
+
 本期视频主要实现使用Flask后端框架实现后端服务并使用ApiFox进行前后端联调            
 业务流程图如下所示:        
 <img src="./img.png" alt="业务流程图" width="900" />                     
