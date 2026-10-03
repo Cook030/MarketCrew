@@ -1,2 +1,10 @@
 # 根目录 README.md 仅保留在本地，不纳入版本管理
 /README.md
+crewaiBackend/.venv/
+crewaiBackend/data/
+__pycache__/
+*.pyc
+.uv-cache/
+.env
+.env.*
+!.env.example
