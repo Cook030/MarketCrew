@@ -95,7 +95,12 @@
 
     <div v-if="jobId" class="job-info" role="status">
       <span>任务 ID：{{ jobId }}</span>
-      <span>状态：{{ jobStatus }}</span>
+      <span class="job-status">状态：{{ jobStatus }}
+        <span class="phase-badge" :data-phase="jobPhase" :class="{ active: jobActive && jobPhase !== 'Disconnected' }" aria-live="polite">
+          <span class="phase-spark" aria-hidden="true">✳</span>
+          {{ jobPhase }}<span v-if="jobActive && jobPhase !== 'Disconnected'" class="phase-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        </span>
+      </span>
     </div>
     <div v-if="jobSources.length" class="sources">
       <p>任务检索过的材料片段（具体结论的引用见生成结果）</p>
@@ -110,14 +115,17 @@
     </div>
 
     <div class="result">
-      <label for="crew-result">任务结果</label>
+      <div class="result-header">
+        <label for="crew-result">任务结果</label>
+        <el-button size="small" :disabled="!resultContent" @click="copyResult">复制</el-button>
+      </div>
       <el-input
         id="crew-result"
         v-model="resultContent"
         type="textarea"
         :rows="10"
         readonly
-        placeholder="启动任务后，点击“刷新结果”查看进度和结果。"
+        placeholder="启动任务后自动更新进度和结果。"
       />
     </div>
   </section>
@@ -151,6 +159,10 @@ const starting = ref(false)
 const refreshing = ref(false)
 const jobId = ref('')
 const jobStatus = ref('')
+const jobPhase = ref('Starting')
+const jobActive = computed(() => !['COMPLETE', 'ERROR'].includes(jobStatus.value))
+let taskTimer
+const taskRequests = new AbortController()
 const resultContent = ref('')
 const errorMessage = ref('')
 const jobSources = ref([])
@@ -240,7 +252,19 @@ async function refreshKnowledgeBase() {
 onUnmounted(() => {
   clearTimeout(pollingTimer)
   materialRequests.abort()
+  clearTimeout(taskTimer)
+  taskRequests.abort()
 })
+
+async function copyResult() {
+  if (!resultContent.value) return
+  try {
+    await navigator.clipboard.writeText(resultContent.value)
+    ElMessage.success('复制成功')
+  } catch {
+    ElMessage.error('复制失败，请手动选择结果复制')
+  }
+}
 
 function showRequestError(error, fallback) {
   const detail = error.response?.data?.message
@@ -258,7 +282,10 @@ async function startTask() {
     const response = await axios.post(API_URL, payload)
     if (!response.data.job_id) throw new Error('Missing job_id')
     jobId.value = response.data.job_id
-    jobStatus.value = '已提交'
+    clearTimeout(taskTimer)
+    jobStatus.value = 'STARTED'
+    jobPhase.value = 'Starting'
+    taskTimer = setTimeout(refreshTask, 1500)
     resultContent.value = ''
     jobSources.value = []
     ElMessage.success(materialFiles.value.length ? '任务已提交，将使用项目材料知识库' : '任务已提交')
@@ -271,15 +298,22 @@ async function startTask() {
 
 async function refreshTask() {
   if (!jobId.value || refreshing.value || starting.value) return
+  clearTimeout(taskTimer)
   errorMessage.value = ''
   refreshing.value = true
   try {
-    const response = await axios.get(`${API_URL}/${encodeURIComponent(jobId.value)}`)
+    const response = await axios.get(`${API_URL}/${encodeURIComponent(jobId.value)}`, { signal: taskRequests.signal })
     jobStatus.value = response.data.status
-    resultContent.value = JSON.stringify(response.data, null, 2)
+    jobPhase.value = response.data.phase || ({ COMPLETE: 'Finished', ERROR: 'Failed' }[response.data.status] || 'Thinking')
+    if (jobActive.value) taskTimer = setTimeout(refreshTask, 1500)
+    const result = response.data.result
+    resultContent.value = typeof result === 'string' ? result : result?.body || ''
     jobSources.value = response.data.sources || []
   } catch (error) {
-    showRequestError(error, '未能获取任务结果，请稍后重试')
+    if (!axios.isCancel(error)) {
+      jobPhase.value = 'Disconnected'
+      showRequestError(error, '未能获取任务结果，请点击刷新结果重试')
+    }
   } finally {
     refreshing.value = false
   }
@@ -407,10 +441,27 @@ h1 {
   margin-top: 12px;
 }
 
-.result label {
-  display: block;
+.result-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   margin-bottom: 8px;
 }
+
+.job-status, .phase-badge { display: inline-flex; align-items: center; gap: 10px; }
+.phase-badge { padding: 5px 12px; border-radius: 20px; background: #faf2ed; color: #a65d40; font-size: 13px; gap: 7px; }
+.phase-spark { font-size: 20px; line-height: 1; }
+.active .phase-spark { animation: breathe 1.8s ease-in-out infinite; }
+.phase-dots { display: inline-flex; gap: 3px; }
+.phase-dots i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
+.phase-dots i:nth-child(2) { animation: second-dot 1.5s step-end infinite; }
+.phase-dots i:nth-child(3) { animation: third-dot 1.5s step-end infinite; }
+.phase-badge[data-phase='Finished'] { color: #2e7d32; background: #edf7ee; }
+.phase-badge[data-phase='Failed'], .phase-badge[data-phase='Disconnected'] { color: #b42318; background: #fef0ee; }
+@keyframes breathe { 0%, 100% { opacity: .4; transform: scale(.85); } 50% { opacity: 1; transform: scale(1); } }
+@keyframes second-dot { 0%, 100% { opacity: 0; } 33.333% { opacity: 1; } }
+@keyframes third-dot { 0%, 100% { opacity: 0; } 66.667% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .active .phase-spark, .phase-dots i { animation: none; opacity: 1; } }
 
 @media (max-width: 600px) {
   .crew-form-container {
