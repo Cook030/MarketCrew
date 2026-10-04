@@ -16,6 +16,7 @@ class Event:
 
 @dataclass
 class Job:
+    phase: str = 'Starting'
     status: str = 'STARTED'
     events: list = field(default_factory=list)
     result: object = None
@@ -36,3 +37,8 @@ def record_sources(job_id, passages):
             if passage['chunk_id'] not in known:
                 jobs[job_id].sources.append(passage)
                 known.add(passage['chunk_id'])
+
+
+def set_phase(job_id, phase):
+    with jobs_lock:
+        jobs[job_id].phase = phase

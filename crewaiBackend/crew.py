@@ -19,7 +19,7 @@ class CrewtestprojectCrew:
         for name, config in agents_config.items():
             tools = list(material_tools)
             if name != 'creative_content_creator':
-                tools.extend(web_tools())
+                tools.extend(web_tools(job_id))
             agents[name] = Agent(
                 config=config, llm=llm, tools=tools, verbose=False,
                 allow_delegation=False, max_iter=12, cache=False,

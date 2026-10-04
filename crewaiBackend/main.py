@@ -16,7 +16,7 @@ os.environ.setdefault('MEM0_DIR', str(data_directory / 'mem0'))
 os.environ.setdefault('EMBEDCHAIN_CONFIG_DIR', str(data_directory))
 os.environ.setdefault('CREWAI_STORAGE_DIR', str(data_directory / 'crew-memory'))
 
-from utils.jobManager import Job, append_event, jobs, jobs_lock, record_sources
+from utils.jobManager import Job, append_event, jobs, jobs_lock, record_sources, set_phase
 from utils.knowledgeBase import KnowledgeBaseError, KnowledgeBaseStore, embedding_config
 
 PORT = int(os.getenv('PORT', '8012'))
@@ -61,23 +61,27 @@ def kickoff_crew(job_id, inputs, knowledge_base_id=None):
         from utils.agentTools import make_knowledge_tool
         from utils.myLLM import my_llm
 
+        set_phase(job_id, 'Thinking')
         tool = None
         inputs = dict(inputs)
         if knowledge_base_id:
             append_event(job_id, '正在加载本次项目知识库')
             tool = make_knowledge_tool(
                 knowledge_bases, knowledge_base_id,
-                lambda passages: record_sources(job_id, passages),
+                lambda passages: record_sources(job_id, passages), job_id=job_id,
             )
             # Initial retrieval ensures uploaded material reaches the workflow even before a tool call.
+            set_phase(job_id, 'Searching')
             inputs['knowledge_context'] = tool.invoke({'query': inputs['project_description']})
         else:
             inputs['knowledge_context'] = '未提供项目材料。不可虚构材料事实；可通过网址收集公开信息。'
+        set_phase(job_id, 'Thinking')
         append_event(job_id, '开始执行营销任务')
         output = CrewtestprojectCrew(job_id, my_llm(os.getenv('LLM_TYPE', 'openai')), tool).kickoff(inputs)
         result = output.json_dict if output.json_dict is not None else output.raw
         with jobs_lock:
             jobs[job_id].status = 'COMPLETE'
+            jobs[job_id].phase = 'Finished'
             jobs[job_id].result = result
         append_event(job_id, '任务完成')
     except Exception as error:
@@ -86,6 +90,7 @@ def kickoff_crew(job_id, inputs, knowledge_base_id=None):
         message = str(error) if isinstance(error, KnowledgeBaseError) else '任务执行失败，请检查模型、Embedding 或网页服务配置后重试'
         with jobs_lock:
             jobs[job_id].status = 'ERROR'
+            jobs[job_id].phase = 'Failed'
             jobs[job_id].result = None
         append_event(job_id, message)
 
@@ -132,7 +137,7 @@ def get_status(job_id):
             return jsonify(message='任务不存在'), 404
         # Snapshot mutable state under the lock before serializing.
         return jsonify(
-            job_id=job_id, status=job.status, result=job.result,
+            job_id=job_id, status=job.status, phase=job.phase, result=job.result,
             knowledge_base_id=job.knowledge_base_id, sources=list(job.sources),
             events=[{'timestamp': event.timestamp.isoformat(), 'data': event.data} for event in job.events],
         )

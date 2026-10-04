@@ -9,18 +9,24 @@ from bs4 import BeautifulSoup
 from langchain_core.tools import StructuredTool
 
 from utils.knowledgeBase import retrieve_passages
+from utils.jobManager import set_phase
 
 
-def make_knowledge_tool(store, knowledge_base_id, record_sources):
+def make_knowledge_tool(store, knowledge_base_id, record_sources, job_id=None):
     # Resolve once and bind the scope on the server. The agent never supplies a project ID.
     retriever = store.retriever(knowledge_base_id)
 
     def search(query: str) -> str:
         """Retrieve supporting passages from this project's uploaded materials."""
+        if job_id:
+            set_phase(job_id, 'Searching')
         try:
             passages = retrieve_passages(retriever, query)
         except Exception as exc:
             raise RuntimeError('项目材料检索失败，请检查 Embedding 服务连接') from exc
+        finally:
+            if job_id:
+                set_phase(job_id, 'Thinking')
         record_sources(passages)
         return json.dumps({
             'status': 'FOUND' if passages else 'NO_MATCH',
@@ -68,8 +74,21 @@ def web_search(query: str) -> str:
         return json.dumps({'status': 'ERROR', 'message': '网页搜索失败，请明确报告缺失的信息'})
 
 
-def web_tools():
-    tools = [StructuredTool.from_function(read_website, name='read_website')]
+def web_tools(job_id=None):
+    def tracked(function):
+        def run(**kwargs):
+            if job_id:
+                set_phase(job_id, 'Searching')
+            try:
+                return function(**kwargs)
+            finally:
+                if job_id:
+                    set_phase(job_id, 'Thinking')
+        tool = StructuredTool.from_function(function, name=function.__name__)
+        tool.func = run
+        return tool
+
+    tools = [tracked(read_website)]
     if os.getenv('SERPER_API_KEY'):
-        tools.append(StructuredTool.from_function(web_search, name='web_search'))
+        tools.append(tracked(web_search))
     return tools
