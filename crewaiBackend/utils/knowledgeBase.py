@@ -37,7 +37,7 @@ def create_embedding(config):
     if not key:
         raise KnowledgeBaseError('请先配置 EMBEDDING_API_KEY 或 OPENAI_API_KEY，再上传材料')
     return OpenAIEmbedding(
-        model=config['model'], api_base=config['api_base'], api_key=key,
+        model_name=config['model'], api_base=config['api_base'], api_key=key,
         timeout=30, max_retries=2, embed_batch_size=16,
     )
 
