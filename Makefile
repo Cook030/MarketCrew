@@ -23,17 +23,17 @@ PYTHON ?= $(VENV_PYTHON)
 .PHONY: help install install-backend install-frontend backend frontend dev build
 
 help:
-	@echo CrewAIFullstackTest 可用命令
+	@echo CrewAIFullstackTest targets
 	@echo ----------------------------------------
-	@echo make install           安装后端与前端全部依赖
-	@echo make install-backend   创建 .venv 并安装 requirements.txt
-	@echo make install-frontend  安装前端依赖
-	@echo make backend           启动后端 http://127.0.0.1:8012
-	@echo make frontend          启动前端 http://localhost:5173
-	@echo make dev              新窗口启动后端，当前窗口启动前端
-	@echo make build            构建前端生产包
+	@echo make install           Install backend venv deps and frontend deps
+	@echo make install-backend   Create .venv and install requirements.txt
+	@echo make install-frontend  Install frontend deps
+	@echo make backend           Start API at http://127.0.0.1:8012
+	@echo make frontend          Start web UI at http://localhost:5173
+	@echo make dev               Start API in a new window, web UI in this one
+	@echo make build             Build frontend for production
 	@echo ----------------------------------------
-	@echo 自定义解释器: make backend PYTHON=python
+	@echo Custom interpreter: make backend PYTHON=python
 
 install: install-backend install-frontend
 
@@ -56,7 +56,7 @@ dev:
 	$(NPM) --prefix $(FRONTEND_DIR) run dev
 else
 dev:
-	@echo Windows 之外请分别在两个终端执行 make backend 与 make frontend
+	@echo Outside Windows run "make backend" and "make frontend" in two terminals
 endif
 
 build: install-frontend
